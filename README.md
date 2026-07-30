@@ -8,9 +8,9 @@ imports — so it is fully unit-testable and the dashboard is a thin rendering l
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install pandas pytest streamlit altair
+.venv/bin/pip install -r requirements.txt
 
-.venv/bin/python -m pytest -q          # 47 tests
+.venv/bin/python -m pytest -q          # 72 tests
 .venv/bin/streamlit run app/dashboard.py
 ```
 
@@ -24,8 +24,28 @@ Dashboard: http://localhost:8501
 | `src/models.py` | `Equipment` dataclass mirroring the CSV columns |
 | `src/loader.py` | CSV → `Equipment` objects; normalises `NULL`/blank to `None` |
 | `src/analytics.py` | Pure logic: utilization, status, overdue, anomalies, site summary |
-| `tests/test_analytics.py` | Covers every analytics function against the real dataset rows |
+| `src/ml.py` | Demand prediction + Isolation Forest cross-check |
+| `src/lambda_handler.py` | Scheduled sweep; pure `build_payload()` + thin AWS shim |
+| `tests/` | 72 tests across analytics, ML and the Lambda payload |
 | `app/dashboard.py` | Streamlit UI (black / white / Cat yellow `#FFCC00`) |
+| `infra/` | Terraform: DynamoDB, SNS, Lambda, EventBridge, CloudWatch, budget |
+| `.github/workflows/ci.yml` | Tests + `terraform validate` + dashboard smoke test |
+
+## Verification status
+
+Be precise about this when presenting:
+
+| Item | State |
+|---|---|
+| 72 unit tests | **Verified** — `pytest -q`, 72 passed |
+| Dashboard, all 8 sections | **Verified** — rendered in headless Chromium, 0 console errors |
+| Check-in guardrail | **Verified** — blocked empty submit in a real browser session |
+| Terraform config | **Verified** — `terraform init` + `validate` pass, `fmt -check` clean |
+| `terraform plan` / `apply` | **Not run** — requires AWS credentials |
+| Deployed AWS resources | **None exist.** No account configured |
+| SNS email delivery | **Not verified** — needs a deployed topic + confirmed subscription |
+| Dockerfile | **Not built** — Docker not installed where it was authored |
+| GitHub Actions run | **Not run** — repo is local-only, no remote pushed. Every step was verified locally |
 
 ## Core metric
 
@@ -85,13 +105,77 @@ Operator ID are supplied, which makes a NULL check-in structurally impossible ra
 convention. Verified in a browser: selecting EQX1002 and submitting empty fields is blocked and records
 nothing; supplying both clears the UNASSIGNED status.
 
+## Machine learning — and why the rules still win
+
+### Demand prediction (`predict_demand`)
+
+Random Forest predicting rental duration from equipment type, site and usage intensity.
+
+| | R² | MAE |
+|---|---|---|
+| Leave-one-out (reported) | **0.42** | 4.4 days |
+| Always-predict-the-mean baseline | 0.00 | 5.5 days |
+| In-sample (shown for contrast only) | 0.94 | — |
+
+Two deliberate choices, both worth defending out loud:
+
+- **`rental_days` is the target, so it is excluded from the features.** An earlier draft had it in both
+  places. That leaks the label and lifts in-sample R² to 0.97 while teaching the model nothing —
+  `rental_days` came out as the single most important "feature". `test_ml.py` has a regression guard so
+  it cannot come back.
+- **Metrics are leave-one-out cross-validated, not in-sample.** At n=7 a `train_test_split` with
+  `if len(df) >= 10` silently sets `X_train = X_test = X` and reports fiction.
+
+The model beats guessing the mean by 1.1 days. That's a real but modest gain, and it is the honest
+ceiling on seven rentals. This is a duration model, not a time-series forecast — one closed rental per
+asset with no repeat cycles means there is no series to extrapolate.
+
+### Anomaly detection: Isolation Forest inverts on this fleet
+
+Run unsupervised over usage features, Isolation Forest flags **EQX1005 (100% utilization) and EQX1003
+(94%)** — the two healthiest machines — and marks both ghost assets as normal. Agreement with the rules
+is **0%**: it disagrees on all seven assets.
+
+The cause is structural, not a tuning problem: 5 of 7 assets are under-utilized, so the statistically
+rare pattern is *a machine being used properly*. Outlier detection finds rarity; the brief asks for
+misuse. On this fleet those are opposites. Three framings were tested and all failed:
+
+| Framing | Result |
+|---|---|
+| Unsupervised, `contamination` 0.15 / 0.25 / 0.3 / auto | Flags the healthy assets every time |
+| Trained on healthy assets only | Degenerates — n=2, all scores 0.0 |
+| Trained on 400 synthetic healthy samples | Scores saturate; still flags EQX1005 |
+
+**So rule-based detection is the shipping signal and Isolation Forest is a labeled cross-check.** That
+is an engineering conclusion backed by tests (`test_isolation_forest_flags_the_healthiest_assets`), not
+a fallback. A deep-learning autoencoder would inherit the same n=7 problem.
+
+## AWS architecture
+
+`infra/` provisions the alerting pipeline: DynamoDB (asset state, on-demand billing, site GSI) → Lambda
+(the sweep, reusing `analytics.py` unchanged) → SNS (email) with EventBridge scheduling, a CloudWatch
+error alarm on the sweep itself, and a $5 monthly budget guardrail. IAM is least-privilege: publish to
+one topic, read/write one table.
+
+`terraform validate` passes and `fmt -check` is clean. **Nothing has been deployed** — see the
+verification table above. To deploy:
+
+```bash
+cd infra
+terraform init
+terraform plan -var="alert_email=you@example.com"    # needs AWS credentials
+```
+
+The Lambda needs the AWS-managed pandas layer (`pandas_layer_arn`) because `loader.py` imports pandas;
+the ARN is region-specific and the variable documents how to find it.
+
 ## Known gaps
 
 - **Fuel usage and GPS location** are in the brief's usage-logging outcome but absent from the dataset,
   so no column was invented for them. Adding them is a loader + dataclass change; the analytics
-  signature does not move.
-- **Demand forecasting** is not implemented. With 7 closed rentals and no repeat cycles per site there
-  is no time series to fit — any forecast would be a fabricated number. The honest version is the
-  aggregate the data does support: S003/S004 hold the under-utilized excavators while the unassigned
-  bucket carries 364 idle hours, so the recommendation is reallocation before new rentals. Wire real
-  forecasting once multiple rental cycles per site exist.
+  signatures do not move.
+- **No time-series forecasting.** See the demand section — the data does not support it. The defensible
+  aggregate: the unassigned bucket carries 364 idle hours against zero engine hours, so the
+  recommendation is reallocation before new rentals.
+- **`data/equipment.csv` is still the source of truth**, not DynamoDB. The Terraform provisions the
+  table but no migration or write path exists yet.
