@@ -150,6 +150,50 @@ misuse. On this fleet those are opposites. Three framings were tested and all fa
 is an engineering conclusion backed by tests (`test_isolation_forest_flags_the_healthiest_assets`), not
 a fallback. A deep-learning autoencoder would inherit the same n=7 problem.
 
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Edge["Field layer"]
+    QR["QR / RFID scan<br/><i>simulated in UI</i>"]
+    TEL["Equipment telemetry<br/><i>replayed from dataset</i>"]
+  end
+
+  subgraph Core["Analytics core — pure, no I/O"]
+    AN["analytics.py<br/>utilization · status<br/>overdue · anomalies"]
+    ML["ml.py<br/>demand model<br/>IF cross-check"]
+  end
+
+  subgraph AWS["AWS — provisioned by Terraform"]
+    DDB[("DynamoDB<br/>asset state")]
+    LAM["Lambda<br/>scheduled sweep"]
+    EVB["EventBridge<br/>daily trigger"]
+    SNS["SNS<br/>email alerts"]
+    CW["CloudWatch<br/>logs + error alarm"]
+  end
+
+  UI["Streamlit dashboard<br/>6-tab navigation"]
+  CI["GitHub Actions<br/>72 tests · tf validate · smoke"]
+
+  QR --> AN
+  TEL --> AN
+  AN --> UI
+  ML --> UI
+  AN --> DDB
+  EVB --> LAM
+  LAM --> AN
+  LAM --> SNS
+  LAM --> CW
+  CW -. alarms on failure .-> SNS
+  CI -.->|validates| AWS
+
+  classDef sim stroke-dasharray: 4 4
+  class QR,TEL sim
+```
+
+Dashed nodes are simulated: no scanner hardware, and telemetry replays the
+supplied dataset rather than streaming live. Everything else runs.
+
 ## AWS architecture
 
 `infra/` provisions the alerting pipeline: DynamoDB (asset state, on-demand billing, site GSI) → Lambda

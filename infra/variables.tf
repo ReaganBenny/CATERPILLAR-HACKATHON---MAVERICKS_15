@@ -28,18 +28,6 @@ variable "sweep_schedule" {
   default     = "cron(0 8 * * ? *)"
 }
 
-variable "pandas_layer_arn" {
-  description = <<-EOT
-    ARN of the AWS-managed SDK-for-pandas layer. The loader depends on pandas,
-    which exceeds the inline Lambda package limit, so it must come from a layer.
-    Region- and version-specific; find yours with:
-      aws lambda list-layer-versions --layer-name AWSSDKPandas-Python311 --region <region>
-    Leave empty to deploy without it (the Lambda will fail on import until set).
-  EOT
-  type        = string
-  default     = ""
-}
-
 variable "monthly_budget_usd" {
   description = "Monthly spend cap that triggers a budget alert. Guardrail against a hackathon surprise bill."
   type        = number

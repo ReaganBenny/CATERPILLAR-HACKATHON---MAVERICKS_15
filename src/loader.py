@@ -1,7 +1,14 @@
+"""
+CSV -> Equipment objects.
+
+Deliberately stdlib-only. The Lambda imports this module, and depending on
+pandas here would force the AWS-managed pandas layer into the deployment for
+the sake of reading seven rows. Standard-library `csv` removes that dependency
+entirely, so the function packages as a few KB with no layers attached.
+"""
+import csv
 from datetime import datetime
 from pathlib import Path
-
-import pandas as pd
 
 from models import Equipment
 
@@ -22,7 +29,7 @@ COLUMN_MAP = {
 
 def _clean(value):
     """The source spreadsheet encodes missing values as the literal string NULL."""
-    if value is None or pd.isna(value):
+    if value is None:
         return None
     text = str(value).strip()
     if text == "" or text.upper() == "NULL":
@@ -38,19 +45,19 @@ def _parse_date(value):
 
 
 def load_equipment(path: Path = DATA_PATH) -> list[Equipment]:
-    df = pd.read_csv(path, dtype=str).rename(columns=COLUMN_MAP)
-
     fleet = []
-    for _, row in df.iterrows():
-        fleet.append(Equipment(
-            equipment_id=_clean(row["equipment_id"]),
-            type=_clean(row["type"]),
-            site_id=_clean(row["site_id"]),
-            check_in_date=_parse_date(row["check_in_date"]),
-            check_out_date=_parse_date(row["check_out_date"]),
-            engine_hours_per_day=float(_clean(row["engine_hours_per_day"]) or 0),
-            idle_hours_per_day=float(_clean(row["idle_hours_per_day"]) or 0),
-            rental_days=int(_clean(row["rental_days"]) or 0),
-            operator_id=_clean(row["operator_id"]),
-        ))
+    with open(path, newline="", encoding="utf-8") as handle:
+        for raw in csv.DictReader(handle):
+            row = {COLUMN_MAP[k]: v for k, v in raw.items() if k in COLUMN_MAP}
+            fleet.append(Equipment(
+                equipment_id=_clean(row["equipment_id"]),
+                type=_clean(row["type"]),
+                site_id=_clean(row["site_id"]),
+                check_in_date=_parse_date(row["check_in_date"]),
+                check_out_date=_parse_date(row["check_out_date"]),
+                engine_hours_per_day=float(_clean(row["engine_hours_per_day"]) or 0),
+                idle_hours_per_day=float(_clean(row["idle_hours_per_day"]) or 0),
+                rental_days=int(_clean(row["rental_days"]) or 0),
+                operator_id=_clean(row["operator_id"]),
+            ))
     return fleet

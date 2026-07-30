@@ -142,7 +142,7 @@ resource "aws_lambda_function" "sweep" {
   filename         = data.archive_file.lambda.output_path
   source_code_hash = data.archive_file.lambda.output_base64sha256
 
-  layers = var.pandas_layer_arn == "" ? [] : [var.pandas_layer_arn]
+  # No layers required: loader.py is stdlib-only, so the package is a few KB.
 
   environment {
     variables = {
