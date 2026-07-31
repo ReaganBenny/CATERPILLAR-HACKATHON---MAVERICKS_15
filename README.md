@@ -10,7 +10,7 @@ imports — so it is fully unit-testable and the dashboard is a thin rendering l
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
-.venv/bin/python -m pytest -q          # 72 tests
+.venv/bin/python -m pytest -q          # 98 tests
 .venv/bin/streamlit run app/dashboard.py
 ```
 
@@ -20,13 +20,16 @@ Dashboard: http://localhost:8501
 
 | Path | Role |
 |---|---|
-| `data/equipment.csv` | Source dataset, `NULL` strings preserved as in the original sheet |
+| `data/equipment.csv` | **The supplied dataset, byte-for-byte unmodified** |
+| `data/telemetry.csv` | SIMULATED fuel + GPS (absent from the supplied schema) |
+| `data/active_rentals.csv` | SIMULATED open rentals, for live ACTIVE / IDLE / DUE SOON |
+| `data/sites.csv` | SIMULATED site registry with coordinates for geofencing |
 | `src/models.py` | `Equipment` dataclass mirroring the CSV columns |
 | `src/loader.py` | CSV → `Equipment` objects; normalises `NULL`/blank to `None` |
 | `src/analytics.py` | Pure logic: utilization, status, overdue, anomalies, site summary |
 | `src/ml.py` | Demand prediction + Isolation Forest cross-check |
 | `src/lambda_handler.py` | Scheduled sweep; pure `build_payload()` + thin AWS shim |
-| `tests/` | 72 tests across analytics, ML and the Lambda payload |
+| `tests/` | 98 tests across analytics, telemetry, ML and the Lambda payload |
 | `app/dashboard.py` | Streamlit UI (black / white / Cat yellow `#FFCC00`) |
 | `infra/` | Terraform: DynamoDB, SNS, Lambda, EventBridge, CloudWatch, budget |
 | `.github/workflows/ci.yml` | Tests + `terraform validate` + dashboard smoke test |
@@ -37,8 +40,8 @@ Be precise about this when presenting:
 
 | Item | State |
 |---|---|
-| 72 unit tests | **Verified** — `pytest -q`, 72 passed |
-| Dashboard, all 8 sections | **Verified** — rendered in headless Chromium, 0 console errors |
+| 98 unit tests | **Verified** — `pytest -q`, 98 passed |
+| Dashboard, all 7 tabs | **Verified** — rendered in headless Chromium, 0 console errors |
 | Check-in guardrail | **Verified** — blocked empty submit in a real browser session |
 | Terraform config | **Verified** — `terraform init` + `validate` pass, `fmt -check` clean |
 | GitHub Actions CI | **Verified** — green on every push: tests + `terraform validate` + smoke test |
@@ -72,10 +75,13 @@ it. That maps directly to the brief's first pain point, equipment lost or unacco
 
 **2. Every row has a Check-Out Date, and `check_out − check_in == rental_days` in all 7 cases.** These
 are closed historical rentals. Overdue is therefore computed as
-`expected_return = check_out_date + rental_days` per spec — the scheduled return of the *next* rental
-cycle. At the default `today` of 2025-06-01 all seven are already past that date (5 OVERDUE +
-2 UNASSIGNED), so the sidebar date input exists to make the logic demonstrable: **set it to 2025-03-05
-to see all four statuses at once** (2 ACTIVE, 2 IDLE, 1 OVERDUE, 2 UNASSIGNED).
+`check_out_date + rental_days` for a closed rental — the scheduled return of the *next* cycle. At the
+default `today` of 2025-06-01 all seven supplied rows are already past that date (5 OVERDUE +
+2 UNASSIGNED), which is why `data/active_rentals.csv` exists: four **simulated open rentals** supply
+the live ACTIVE, IDLE and DUE SOON cases, so all four statuses appear without touching the date picker.
+
+An open rental has no check-out, so its clock runs from check-in instead: `due_date()` returns
+`check_in + rental_days`. Without that branch an in-progress rental could never be overdue.
 
 | Asset | Utilization | Reading |
 |---|---|---|

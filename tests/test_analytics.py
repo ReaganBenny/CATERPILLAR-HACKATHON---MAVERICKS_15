@@ -131,9 +131,29 @@ def test_days_until_due_positive_when_future(by_id):
     assert an.days_until_due(by_id["EQX1004"], date(2025, 5, 20)) == 5
 
 
-def test_days_until_due_none_without_check_out():
+def test_open_rental_is_due_from_check_in():
+    """
+    An open rental has no check-out, so the clock runs from check-in. Without
+    this an in-progress rental could never be overdue.
+    """
     row = Equipment("EQX9998", "Grader", "S001", date(2025, 5, 1), None, 5, 1, 10, "OP998")
+    assert an.due_date(row) == date(2025, 5, 11)
+    assert an.days_until_due(row, TODAY) == -21
+    assert an.is_overdue(row, TODAY) is True
+
+
+def test_days_until_due_none_without_any_date():
+    row = Equipment("EQX9996", "Crane", "S001", None, None, 5, 1, 10, "OP996")
+    assert an.due_date(row) is None
     assert an.days_until_due(row, TODAY) is None
+    assert an.is_overdue(row, TODAY) is False
+
+
+def test_closed_rental_still_uses_check_out_anchor():
+    """Regression guard: the supplied dataset's convention must not shift."""
+    row = Equipment("EQX9995", "Grader", "S001", date(2025, 5, 1),
+                    date(2025, 5, 11), 5, 1, 10, "OP995")
+    assert an.due_date(row) == date(2025, 5, 21)
 
 
 # --- is_overdue / due_soon ---

@@ -25,8 +25,15 @@ unless asked (there is a reason, below).
 > "Before we built anything we read the seven rows you gave us. Two of them —
 > EQX1002 and EQX1007 — have no site and no operator, zero engine hours, and
 > eleven to twelve idle hours a day. They were rented, billed, and never used.
-> Across the fleet that is **364 idle hours charged against zero engine hours**.
-> That single number is what our system exists to surface."
+> Those two alone account for **364 idle hours charged against zero engine
+> hours, and roughly 1,236 litres of diesel burned going nowhere**. Fleet-wide
+> the idle burn is over **4,100 litres**. That is what our system exists to
+> surface."
+
+**Say "simulated" once, early, and you never have to defend it again:** fuel and
+GPS are a separate simulated feed, because the supplied schema carries neither.
+The seven supplied rows are untouched — `data/equipment.csv` is byte-identical
+to what you were given, which is worth saying out loud.
 
 Do not open with a tech-stack slide. Open with their money.
 
@@ -38,13 +45,23 @@ utilization bars.
 > "Every asset, live status, utilization per row. Green is healthy — EQX1005 at
 > 100%. Red is our problem set."
 
-### 2:30–3:30 — Alerts tab
+### 2:30–3:15 — Alerts tab
 
 > "Same data, ranked by urgency, and every alert explains itself in plain
 > language a yard manager can act on — not a score."
 
 Read one aloud verbatim: *"0 engine hours over 11 idle hours — rented for 20
 days and never used."*
+
+### 3:15–3:45 — Location tab
+
+B clicks **Location**. Point at the two orange markers sitting away from every
+registered site.
+
+> "The GPS works — that is the point. We know exactly where the crane is. What
+> nobody knows is *why* it is there, because it is assigned to no site and no
+> operator. A five-kilometre geofence turns 'lost equipment' into an exception
+> you can act on the same day."
 
 ### 3:30–4:30 — Check-In / Out tab: the fix
 

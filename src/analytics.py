@@ -8,11 +8,25 @@ overdue date meaningless (there is no operator to chase for the return).
 """
 from collections import defaultdict
 from datetime import date, timedelta
+from math import asin, cos, radians, sin, sqrt
 
 from models import Equipment
 
 UNDER_UTILIZED_THRESHOLD = 0.20
 HEALTHY_UTILIZATION_THRESHOLD = 0.80
+
+# Indicative diesel burn while idling, litres per hour, by machine type.
+# Used to convert idle hours into a cost the customer can see on an invoice.
+IDLE_FUEL_BURN_RATE = {
+    "Excavator": 4.0,
+    "Bulldozer": 5.0,
+    "Crane": 3.0,
+    "Grader": 3.5,
+}
+DEFAULT_IDLE_FUEL_BURN_RATE = 4.0
+
+# How far an asset may report from its assigned site before it is flagged.
+OFF_SITE_THRESHOLD_KM = 5.0
 
 ACTIVE = "ACTIVE"
 IDLE = "IDLE"
@@ -47,10 +61,30 @@ def expected_return(check_out: date, rental_days: int) -> date:
     return check_out + timedelta(days=rental_days)
 
 
+def due_date(row: Equipment) -> date | None:
+    """
+    The date this asset is expected back.
+
+    Closed rental (check-out recorded): the supplied dataset's convention --
+    check_out + rental_days, i.e. the scheduled return of the next cycle.
+
+    Open rental (no check-out yet): the rental is still running, so the clock
+    started at check-in and the asset is due at check_in + rental_days. Without
+    this branch an open rental could never be overdue, which would make live
+    ACTIVE / DUE SOON states impossible to demonstrate.
+    """
+    if row.check_out_date is not None:
+        return expected_return(row.check_out_date, row.rental_days)
+    if row.check_in_date is not None:
+        return row.check_in_date + timedelta(days=row.rental_days)
+    return None
+
+
 def days_until_due(row: Equipment, today: date) -> int | None:
-    if row.check_out_date is None:
+    due = due_date(row)
+    if due is None:
         return None
-    return (expected_return(row.check_out_date, row.rental_days) - today).days
+    return (due - today).days
 
 
 def is_overdue(row: Equipment, today: date) -> bool:
@@ -93,6 +127,73 @@ def detect_anomalies(row: Equipment) -> list[str]:
     if row.engine_hours_per_day > 0 and util < UNDER_UTILIZED_THRESHOLD:
         findings.append(f"Utilization {util * 100:.0f}% is below healthy threshold")
 
+    return findings
+
+
+def idle_fuel_waste_per_day(row: Equipment) -> float:
+    """
+    Litres burned per day while the machine idles.
+
+    Idling is not free -- a machine sitting with the engine running still burns
+    diesel, which turns idle hours into a number the rental customer can see on
+    an invoice. Burn rates are indicative industry figures, not measured.
+    """
+    rate = IDLE_FUEL_BURN_RATE.get(row.type, DEFAULT_IDLE_FUEL_BURN_RATE)
+    return round(row.idle_hours_per_day * rate, 2)
+
+
+def idle_fuel_waste_total(row: Equipment) -> float:
+    """Litres wasted across the whole rental."""
+    return round(idle_fuel_waste_per_day(row) * row.rental_days, 2)
+
+
+def fleet_idle_fuel_waste(rows: list[Equipment]) -> float:
+    return round(sum(idle_fuel_waste_total(r) for r in rows), 2)
+
+
+def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two coordinates."""
+    radius = 6371.0
+    p1, p2 = radians(lat1), radians(lat2)
+    dp, dl = radians(lat2 - lat1), radians(lon2 - lon1)
+    a = sin(dp / 2) ** 2 + cos(p1) * cos(p2) * sin(dl / 2) ** 2
+    return round(2 * radius * asin(sqrt(a)), 3)
+
+
+def distance_from_site(row: Equipment, sites: dict) -> float | None:
+    """How far the asset is reporting from the site it is assigned to."""
+    if row.latitude is None or row.longitude is None:
+        return None
+    if _is_blank(row.site_id) or row.site_id not in sites:
+        return None
+    site = sites[row.site_id]
+    return distance_km(row.latitude, row.longitude, site.latitude, site.longitude)
+
+
+def location_anomalies(row: Equipment, sites: dict) -> list[str]:
+    """
+    Location findings, kept separate from detect_anomalies() because they need
+    the site registry and the core rules stay dependency-free.
+    """
+    findings = []
+
+    if row.latitude is None or row.longitude is None:
+        findings.append("No GPS fix — asset location cannot be confirmed")
+        return findings
+
+    if _is_blank(row.site_id):
+        findings.append(
+            f"Reporting from {row.latitude:.4f}, {row.longitude:.4f} — "
+            "not a registered site, and no site is assigned"
+        )
+        return findings
+
+    distance = distance_from_site(row, sites)
+    if distance is not None and distance > OFF_SITE_THRESHOLD_KM:
+        findings.append(
+            f"{distance} km from assigned site {row.site_id} — "
+            f"beyond the {OFF_SITE_THRESHOLD_KM} km geofence"
+        )
     return findings
 
 

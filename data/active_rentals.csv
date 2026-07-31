@@ -1,0 +1,5 @@
+Equipment ID,Type,Site ID,Check-In Date,Check-Out Date,Engine Hours/Day,Idle Hours/Day,Rental Days,Last Operator ID
+EQX1008,Excavator,S002,2025-05-25,,6.5,1.5,30,OP402
+EQX1009,Bulldozer,S001,2025-05-18,,7,1,15,OP415
+EQX1010,Grader,S004,2025-05-01,,2.5,7,20,OP423
+EQX1011,Excavator,S003,2025-05-28,,1.5,8,25,OP430

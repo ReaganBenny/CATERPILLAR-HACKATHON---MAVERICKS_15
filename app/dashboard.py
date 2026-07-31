@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import analytics as an
 import ml
-from loader import load_equipment
+from loader import load_equipment, load_fleet, load_sites
 from models import Equipment
 
 CAT_YELLOW = "#FFCC00"
@@ -78,7 +78,11 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-fleet = load_equipment()
+# Supplied dataset (7 closed rentals) plus simulated open rentals, so live
+# ACTIVE / IDLE / DUE SOON states are demonstrable. ML still trains on the
+# supplied history only -- see load_demand_model below.
+fleet = load_fleet()
+sites = load_sites()
 
 
 # ML runs against the source dataset and is cached so it trains once per session
@@ -151,9 +155,10 @@ def build_alerts(rows, today):
             alerts.append((severity[an.UNASSIGNED], row.equipment_id, an.UNASSIGNED,
                            "Unaccounted for — no operator or site on record", reasons))
         elif an.is_overdue(row, today):
+            # due_date, not expected_return: open rentals have no check-out date.
             alerts.append((severity[an.OVERDUE], row.equipment_id, an.OVERDUE,
                            f"{abs(remaining)} days past expected return "
-                           f"({an.expected_return(row.check_out_date, row.rental_days)})", reasons))
+                           f"({an.due_date(row)})", reasons))
         elif an.due_soon(row, today):
             alerts.append((severity["DUE SOON"], row.equipment_id, "DUE SOON",
                            f"Due back in {remaining} day(s) — confirm return or extension", reasons))
@@ -170,9 +175,9 @@ with st.sidebar:
     st.markdown(f"### <span style='color:{CAT_YELLOW}'>Controls</span>", unsafe_allow_html=True)
     today = st.date_input("Today (drives overdue logic)", value=date(2025, 6, 1))
     st.caption(
-        "Every rental in the source sheet is already past its return date at "
-        "2025-06-01. Set this to **2025-03-05** to see a mixed board "
-        "(ACTIVE / IDLE / OVERDUE / UNASSIGNED all present)."
+        "All four statuses are live at the default date. The seven supplied "
+        "rentals are closed and past their return date; the simulated open "
+        "rentals supply the ACTIVE, IDLE and DUE SOON cases."
     )
     st.divider()
     st.markdown("**Thresholds**")
@@ -214,8 +219,9 @@ kpis = [
     ("Overdue", statuses.count(an.OVERDUE)),
     ("Unassigned", statuses.count(an.UNASSIGNED)),
     ("Fleet avg utilization", f"{fleet_util:.0%}"),
+    ("Diesel burned idling", f"{an.fleet_idle_fuel_waste(rows):,.0f} L"),
 ]
-for col, (label, value) in zip(st.columns(5), kpis):
+for col, (label, value) in zip(st.columns(6), kpis):
     col.markdown(
         f'<div class="kpi"><div class="kpi-label">{label}</div>'
         f'<div class="kpi-value">{value}</div></div>',
@@ -225,9 +231,10 @@ for col, (label, value) in zip(st.columns(5), kpis):
 st.write("")
 
 # --- navigation bar ---
-tab_fleet, tab_alerts, tab_sites, tab_scan, tab_demand, tab_ml = st.tabs([
+tab_fleet, tab_alerts, tab_map, tab_sites, tab_scan, tab_demand, tab_ml = st.tabs([
     "Fleet",
     f"Alerts ({len(alerts)})",
+    "Location",
     "Site Analytics",
     "Check-In / Out",
     "Demand Forecast",
@@ -238,21 +245,26 @@ tab_fleet, tab_alerts, tab_sites, tab_scan, tab_demand, tab_ml = st.tabs([
 with tab_fleet:
     st.markdown("#### Asset Dashboard")
     header = ("Equipment", "Type", "Site", "Operator", "Status", "Utilization",
-              "Engine h/day", "Idle h/day", "Rental days", "Expected return", "Days to due")
+              "Engine h/day", "Idle h/day", "Fuel L/day", "Idle fuel wasted",
+              "Rental days", "Due", "Days to due")
     body = ""
     for row in rows:
         state = an.status(row, today)
         badge = f'<span class="badge" style="background:{STATUS_COLORS[state]}">{state}</span>'
-        due = an.expected_return(row.check_out_date, row.rental_days) if row.check_out_date else None
+        due = an.due_date(row)
         remaining = an.days_until_due(row, today)
-        remaining_text = "open rental" if remaining is None else (
+        remaining_text = "—" if remaining is None else (
             f"{remaining} d" if remaining >= 0 else f"{abs(remaining)} d late")
+        open_marker = " <span style='color:#9E9E9E'>(open)</span>" if row.check_out_date is None else ""
+        fuel = f"{row.fuel_usage_per_day:g}" if row.fuel_usage_per_day is not None else "—"
+        wasted = an.idle_fuel_waste_total(row)
         body += (
             "<tr>"
-            f"<td><b>{row.equipment_id}</b></td><td>{row.type}</td>"
+            f"<td><b>{row.equipment_id}</b>{open_marker}</td><td>{row.type}</td>"
             f"<td>{row.site_id or '—'}</td><td>{row.operator_id or '—'}</td>"
             f"<td>{badge}</td><td>{util_bar(an.row_utilization(row))}</td>"
             f"<td>{row.engine_hours_per_day:g}</td><td>{row.idle_hours_per_day:g}</td>"
+            f"<td>{fuel}</td><td>{wasted:,.0f} L</td>"
             f"<td>{row.rental_days}</td><td>{due.isoformat() if due else '—'}</td>"
             f"<td>{remaining_text}</td></tr>"
         )
@@ -280,6 +292,54 @@ with tab_alerts:
                 f'<div class="alert-reason">{headline}</div>{reason_html}</div>',
                 unsafe_allow_html=True,
             )
+
+# --- Location (simulated GPS telemetry) ---
+with tab_map:
+    st.markdown("#### Equipment Location")
+    st.markdown(
+        '<div class="ghost-note">GPS and fuel are <b>simulated telemetry</b> — the supplied '
+        'dataset carries neither, so we added a separate feed rather than inventing columns in '
+        'your sheet. The rental ledger and the telemetry stream are different sources in '
+        'production too, joined on equipment ID.</div>',
+        unsafe_allow_html=True,
+    )
+    st.write("")
+
+    located = [r for r in rows if r.latitude is not None and r.longitude is not None]
+    off_site = [(r, an.location_anomalies(r, sites)) for r in rows]
+    off_site = [(r, f) for r, f in off_site if f]
+
+    map_df = pd.DataFrame([{
+        "lat": r.latitude, "lon": r.longitude,
+        "color": ("#EF6C00" if an.is_unassigned(r) else
+                  "#C62828" if an.is_overdue(r, today) else "#2E7D32"),
+    } for r in located])
+
+    st.map(map_df, latitude="lat", longitude="lon", color="color", size=180, zoom=9)
+    st.caption("Green = on schedule · Red = overdue · Orange = unassigned. "
+               f"Geofence threshold {an.OFF_SITE_THRESHOLD_KM:g} km from assigned site.")
+
+    st.write("")
+    if off_site:
+        st.markdown("**Location exceptions**")
+        for row, findings in off_site:
+            for finding in findings:
+                st.markdown(
+                    f'<div class="alert" style="border-color:{STATUS_COLORS[an.UNASSIGNED]}">'
+                    f'<span class="alert-id">{row.equipment_id}</span>'
+                    f'<div class="alert-reason">{finding}</div></div>',
+                    unsafe_allow_html=True,
+                )
+    else:
+        st.success("Every asset is reporting from within its assigned geofence.")
+
+    st.markdown("**Registered sites**")
+    st.dataframe(
+        pd.DataFrame([{"Site": s.site_id, "Name": s.site_name,
+                       "Latitude": s.latitude, "Longitude": s.longitude}
+                      for s in sites.values()]),
+        hide_index=True, width="stretch",
+    )
 
 # --- Site Analytics ---
 with tab_sites:

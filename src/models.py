@@ -13,3 +13,16 @@ class Equipment:
     idle_hours_per_day: float
     rental_days: int
     operator_id: str | None
+    # Telemetry, joined from data/telemetry.csv rather than the rental ledger.
+    # Optional because the supplied dataset does not carry these fields.
+    fuel_usage_per_day: float | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+@dataclass
+class Site:
+    site_id: str
+    site_name: str
+    latitude: float
+    longitude: float
