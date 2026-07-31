@@ -17,12 +17,35 @@ pandas here would force the AWS-managed pandas layer into the deployment for
 the sake of reading a handful of rows.
 """
 import csv
+import os
 from datetime import datetime
 from pathlib import Path
 
 from models import Equipment, Site
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+def _find_data_dir() -> Path:
+    """
+    Locate the data directory in whichever layout we are running under.
+
+    Repo:   src/loader.py      -> ../data
+    Lambda: /var/task/loader.py -> ./data   (the zip flattens modules to the root,
+                                             so ../data resolves to /var/data)
+
+    DATA_DIR env var wins, which is how the Lambda or a container can point at
+    a mounted volume without code changes.
+    """
+    override = os.environ.get("DATA_DIR")
+    if override:
+        return Path(override)
+
+    here = Path(__file__).resolve().parent
+    for candidate in (here.parent / "data", here / "data"):
+        if (candidate / "equipment.csv").is_file():
+            return candidate
+    return here.parent / "data"
+
+
+DATA_DIR = _find_data_dir()
 DATA_PATH = DATA_DIR / "equipment.csv"
 ACTIVE_PATH = DATA_DIR / "active_rentals.csv"
 TELEMETRY_PATH = DATA_DIR / "telemetry.csv"

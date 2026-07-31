@@ -72,9 +72,23 @@ data "archive_file" "lambda" {
     content  = file("${path.module}/../src/models.py")
     filename = "models.py"
   }
+  # Every data feed the loader touches must ship, or the function raises
+  # FileNotFoundError at import time. Total payload is a few KB.
   source {
     content  = file("${path.module}/../data/equipment.csv")
     filename = "data/equipment.csv"
+  }
+  source {
+    content  = file("${path.module}/../data/telemetry.csv")
+    filename = "data/telemetry.csv"
+  }
+  source {
+    content  = file("${path.module}/../data/active_rentals.csv")
+    filename = "data/active_rentals.csv"
+  }
+  source {
+    content  = file("${path.module}/../data/sites.csv")
+    filename = "data/sites.csv"
   }
 }
 
