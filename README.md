@@ -41,11 +41,11 @@ Be precise about this when presenting:
 | Dashboard, all 8 sections | **Verified** — rendered in headless Chromium, 0 console errors |
 | Check-in guardrail | **Verified** — blocked empty submit in a real browser session |
 | Terraform config | **Verified** — `terraform init` + `validate` pass, `fmt -check` clean |
+| GitHub Actions CI | **Verified** — green on every push: tests + `terraform validate` + smoke test |
 | `terraform plan` / `apply` | **Not run** — requires AWS credentials |
-| Deployed AWS resources | **None exist.** No account configured |
+| Deployed AWS resources | **None yet** |
 | SNS email delivery | **Not verified** — needs a deployed topic + confirmed subscription |
 | Dockerfile | **Not built** — Docker not installed where it was authored |
-| GitHub Actions run | **Not run** — repo is local-only, no remote pushed. Every step was verified locally |
 
 ## Core metric
 
